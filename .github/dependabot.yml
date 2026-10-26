@@ -1,12 +1,8 @@
+# Routine updates preserve the supported compatibility lines.
+# Major upgrades are deliberate; security updates retain their separate policy.
+
 version: 2
 
-# Minor and patch updates arrive grouped; major updates arrive one PR at a
-# time so each one is reviewed on its own. Nothing is ignored: a blanket
-# major-version ignore hides the update that carries the fix. Every PR runs
-# the full CI job, which builds and tests against the module's supported Go
-# floor and runs govulncheck over the resulting closure, so a
-# bump that breaks portability or pulls in a known vulnerability fails before
-# review.
 updates:
   - package-ecosystem: gomod
     directory: /
@@ -15,9 +11,15 @@ updates:
       day: monday
     groups:
       gomod:
-        patterns: ['*']
+        patterns: ["*"]
         update-types: [minor, patch]
     labels: [dependencies]
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
+    open-pull-requests-limit: 2
 
   - package-ecosystem: github-actions
     directory: /
@@ -26,6 +28,12 @@ updates:
       day: monday
     groups:
       github-actions:
-        patterns: ['*']
+        patterns: ["*"]
         update-types: [minor, patch]
     labels: [dependencies, ci]
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
+    open-pull-requests-limit: 2
