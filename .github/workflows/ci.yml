@@ -5,22 +5,28 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    # Weekly, not nightly: push + PR runs are the primary gate; the schedule
-    # exists only so the regen-and-diff steps below catch vendored-spec or
-    # generator drift between pushes.
-    - cron: '0 9 * * 0'   # Sunday 09:00 UTC; only fires on the repo's default branch
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch: null
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
+  policy:
+    uses: ezclassify/.github/.github/workflows/ci-policy.yml@a42ece80f520858a2926723d12bba2af2dca0474
+    with:
+      primary-version: "22"
+      full-versions: '["22"]'
   build:
-    if: ${{ github.event_name != 'schedule' || github.repository_owner == 'ezclassify' }}
+    if: ${{ needs.policy.result == 'success' && (github.event_name != 'schedule' || github.repository_owner == 'ezclassify') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -142,6 +148,7 @@ jobs:
           cp -a "$PWD" "$RUNNER_TEMP/sbom-src"
           cd "$RUNNER_TEMP/sbom-src"
           go run -mod=readonly -modfile=tools/sbom/go.mod github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod mod -json -output "$RUNNER_TEMP/sbom.json" .
+        if: ${{ needs.policy.outputs.full == 'true' }}
 
       # Vulnerability scan. govulncheck reports findings the build actually
       # reaches, in the dependency closure and in the standard library of
@@ -176,3 +183,30 @@ jobs:
           name: sbom
           path: ${{ runner.temp }}/sbom.json
           if-no-files-found: error
+        if: ${{ needs.policy.outputs.full == 'true' }}
+    needs:
+      - policy
+  qualification:
+    needs:
+      - policy
+      - build
+    if: ${{ always() && !cancelled() && needs.policy.result == 'success' && needs.policy.outputs.full == 'true' }}
+    uses: ezclassify/.github/.github/workflows/ci-result.yml@a42ece80f520858a2926723d12bba2af2dca0474
+    with:
+      results: ${{ toJSON(needs) }}
+      full: ${{ needs.policy.outputs.full == 'true' }}
+      full-only: "[]"
+      optional: "[]"
+  ci:
+    needs:
+      - policy
+      - build
+      - qualification
+    if: ${{ always() && !cancelled() }}
+    uses: ezclassify/.github/.github/workflows/ci-result.yml@a42ece80f520858a2926723d12bba2af2dca0474
+    with:
+      results: ${{ toJSON(needs) }}
+      full: ${{ needs.policy.outputs.full == 'true' }}
+      full-only: '["qualification"]'
+      optional: "[]"
+run-name: CI · ${{ github.event_name }} · ${{ github.ref_name }}
