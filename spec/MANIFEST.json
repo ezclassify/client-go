@@ -1,0 +1,38 @@
+{
+  "openapiVersion": "1.0.0-dev.30",
+  "openapiSha256": "da547a662ab79fa3f79f7d1a53a0b6a2823b0cd001d15e3d5de2aa90a7da96ff",
+  "specBundleSha256": "e3985ce6280e242297f7ce6e672c832ae577b54eda756a8d06f3ab41c7594388",
+  "specDigest": "b95ad1771b48d795e6f4f1306ace28889a44b064df67eb239bc33f36ccc84031",
+  "contractsSha": "aee9ee11e5eb20388e4df534ba96b7aa281e1830",
+  "sourcePackages": {
+    "@ezclassify/openapi": "1.0.0-dev.30",
+    "@ezclassify/schemas": "1.0.0-dev.30",
+    "@ezclassify/conformance": "1.0.0-dev.30"
+  },
+  "generatedAt": "2026-10-26T04:17:59.067Z",
+  "generators": {
+    "go": {
+      "binary": "oapi-codegen",
+      "version": "v2.8.0",
+      "sha256": "h1:s4hxMxuqtR8jPzXkBTtFwY/SBuj3gEAYikmbBSdtLMM=",
+      "additionalInputs": [
+        {
+          "path": "scripts/regen.sh",
+          "sha256": "07d40b43bc2f8391435c32c1833245c2a82a3eb333eabf4594214513ad5fb8c5"
+        },
+        {
+          "path": "tools/codegen/go.mod",
+          "sha256": "452bb2c7b2f77de755a6ad2e95462e6082ae77fcd3919917bef285863525b6f0"
+        },
+        {
+          "path": "tools/codegen/go.sum",
+          "sha256": "ef86fe4190baa2631e3ea5973095a0389bd425fc755d2aee8b912f93b781531e"
+        }
+      ],
+      "note": "sha256 is the go.sum h1: module hash - platform-independent and verifiable via `go mod verify`"
+    }
+  },
+  "generatedPaths": [
+    "internal/api/api.gen.go"
+  ]
+}
