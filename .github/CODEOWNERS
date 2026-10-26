@@ -1,0 +1,6 @@
+# Default owner for the whole repo. More specific rules below take precedence.
+* @ezclassify/maintainers
+
+# spec/ is vendored from the contracts OpenAPI document and
+# internal/api/api.gen.go is generated from it. Write access to spec/ is
+# enforced by .github/workflows/vendor-readonly.yml, not by review routing.

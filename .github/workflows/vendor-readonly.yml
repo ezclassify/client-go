@@ -1,0 +1,326 @@
+name: vendor-readonly
+
+# Gates changes to the bot-owned spec mirror at spec/.
+# Those paths mirror the source of record in ezclassify/contracts and are
+# written exclusively by the EzClassify spec bot under the
+# `ezclassify-spec-bot` GitHub App identity.
+#
+# Two gates run in series:
+#   1. Identity gate: every commit touching spec/ must be authored by
+#      `ezclassify-spec-bot[bot]` (or a maintainer attaches the
+#      spec-mirror-override override label to the PR).
+#   2. Subject gate: every commit touching spec/ must have a subject
+#      starting with `chore(spec):`.
+# Either failure blocks the merge.
+#
+# What these gates do and do not do: they stop accidents. A maintainer who
+# edits the mirror by hand is refused, because their own git identity and
+# their own subject line ride on the commit and neither matches. A spec/ path
+# dragged in by a rebase or a merge is refused for the same reason.
+#
+# They are not an authentication boundary. `%an` and `%ae` are free-text
+# fields in the commit object, chosen by whoever writes the commit, and GitHub
+# verifies neither. Two lines of setup:
+#     git config user.name  "ezclassify-spec-bot[bot]"
+#     git config user.email "ezclassify-spec-bot[bot]@users.noreply.github.com"
+# plus a `chore(spec):` subject produce a commit this workflow admits on the
+# push path and on the bot-PR path alike. Checking the email as well as the
+# name closes only the narrower case of a human's real address leaking through
+# under a copied display name. Authenticating the mirror would take branch
+# protection on spec/ or verified commit signatures; both are repository
+# settings, not part of this workflow.
+#
+# This runs on `push` as well as `pull_request`, and the push trigger is the
+# one that matters: spec updates usually land by direct push, so a PR-only gate
+# would rarely see a real spec commit.
+
+on:
+  pull_request:
+    paths:
+      - 'spec/**'
+  push:
+    paths:
+      - 'spec/**'
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-vendor-changes:
+    name: Reject unauthorized spec/ changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Enforce bot identity + commit-subject for spec/ commits
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          # Fallback base when the push's recorded `before` is unusable.
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # How far back to look for the bot-authored spec/ state a
+          # rollback restores. Bounded so the search cannot walk the
+          # whole history; see the rollback allowance below.
+          ROLLBACK_SEARCH_DEPTH: 50
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          # Comma-separated list of PR labels (only spec-mirror-override, the
+          # explicit maintainer override, matters here).
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          ALLOWED_BOT_LOGIN: ezclassify-spec-bot[bot]
+          # The exact git identity the spec bot commits with; the per-commit
+          # gate matches it.
+          ALLOWED_BOT_EMAIL: ezclassify-spec-bot[bot]@users.noreply.github.com
+          OVERRIDE_LABEL: spec-mirror-override
+        run: |
+          set -euo pipefail
+
+          # ---------- Resolve what this event introduced ----------
+          # Resolve the widest range that can actually be inspected, then
+          # narrow only as far as the repository forces. Three properties
+          # this block is written to hold, in order of importance:
+          #   - it never exits 0 having inspected an empty set of commits;
+          #   - it never fails a branch-creation push outright, because a
+          #     gate that blocks ordinary branch pushes gets turned off;
+          #   - when it does narrow, it says out loud what it did NOT look at.
+          PUSH_AFTER="${PUSH_AFTER:-$(git rev-parse HEAD)}"
+          ZERO_SHA=0000000000000000000000000000000000000000
+          INSPECTED_RANGE=""
+          NARROWED_TO_HEAD=0
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            INSPECTED_RANGE="$BASE_SHA..$HEAD_SHA"
+          elif [ -n "${PUSH_BEFORE:-}" ] \
+            && [ "$PUSH_BEFORE" != "$ZERO_SHA" ] \
+            && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "$PUSH_BEFORE" "$PUSH_AFTER" 2>/dev/null; then
+            # Present in this clone is not enough: after a force-push the
+            # recorded `before` can be an object this clone still has but which is
+            # no longer an ancestor of the new head, and `before..after`
+            # would then silently omit the commits the push actually
+            # introduced. `--is-ancestor` is what makes the range mean
+            # "everything this push added".
+            INSPECTED_RANGE="$PUSH_BEFORE..$PUSH_AFTER"
+          else
+            # Branch creation (`before` is all zeros), or a force-push whose
+            # base is gone from this clone or is no longer an ancestor of
+            # the new head.
+            echo "WARNING: push base '${PUSH_BEFORE:-<empty>}' is unusable"
+            echo "         (branch creation, or a force-push base that is gone"
+            echo "         or is not an ancestor of ${PUSH_AFTER})."
+            DEFAULT_REF="origin/${DEFAULT_BRANCH:-main}"
+            if ! git rev-parse --verify -q "${DEFAULT_REF}^{commit}" >/dev/null 2>&1; then
+              git fetch --no-tags --quiet origin \
+                "+refs/heads/${DEFAULT_BRANCH:-main}:refs/remotes/${DEFAULT_REF}" \
+                >/dev/null 2>&1 || true
+            fi
+            if git rev-parse --verify -q "${DEFAULT_REF}^{commit}" >/dev/null 2>&1 \
+              && ! git merge-base --is-ancestor "$PUSH_AFTER" "$DEFAULT_REF"; then
+              # Everything reachable from the pushed head that the default
+              # branch does not already contain. The emptiness test is
+              # `merge-base --is-ancestor`, NOT a tip comparison: with an
+              # inequality this range resolves empty whenever the head is
+              # already contained in the default branch, and the gate then
+              # passes having inspected nothing at all.
+              INSPECTED_RANGE="${DEFAULT_REF}..${PUSH_AFTER}"
+              echo "         Falling back to ${INSPECTED_RANGE}."
+            else
+              NARROWED_TO_HEAD=1
+            fi
+          fi
+
+          # A range that resolves to no commits is not a clean bill of
+          # health, it is a failure to resolve. Narrow to the head commit
+          # rather than report on an empty set.
+          if [ "$NARROWED_TO_HEAD" -eq 0 ] \
+            && [ -z "$(git log "$INSPECTED_RANGE" --format='%H')" ]; then
+            echo "WARNING: range ${INSPECTED_RANGE} contains no commits."
+            NARROWED_TO_HEAD=1
+          fi
+
+          if [ "$NARROWED_TO_HEAD" -eq 1 ]; then
+            INSPECTED_RANGE="${PUSH_AFTER} (head commit only)"
+            echo "WARNING: inspecting ONLY the pushed head commit ${PUSH_AFTER}."
+            echo "WARNING: NOT inspected: every other commit this push introduced."
+            echo "         If one of them touches spec/, this run did not gate it."
+            echo "         Refresh through the spec bot, or push to a branch whose"
+            echo "         base is reachable, to get full coverage."
+            # `diff-tree`, NOT `git log -1 "$PUSH_AFTER" -- 'spec/'`. Given a
+            # pathspec, the log form WALKS: if the head commit itself changed
+            # nothing under spec/ it returns the nearest ancestor that did, so
+            # the gate would print "inspecting ONLY the head commit" and then
+            # report on, and pass, a commit that was never in this push.
+            # diff-tree asks only what THIS commit changed.
+            #
+            # A merge commit produces no output here and so falls through to
+            # the refusal below rather than being waved past, which is the
+            # safe direction.
+            VENDOR_COMMITS=""
+            if [ -n "$(git diff-tree --no-commit-id --name-only -r "$PUSH_AFTER" -- 'spec/')" ]; then
+              VENDOR_COMMITS="$PUSH_AFTER"
+            fi
+          else
+            VENDOR_COMMITS=$(git log "$INSPECTED_RANGE" --format='%H' -- 'spec/')
+          fi
+
+          if [ -z "$VENDOR_COMMITS" ]; then
+            # On a push this workflow only ran because the push touched
+            # spec/. So if the range narrowed to the head commit and the head
+            # commit does not itself touch spec/, the commits that DO are
+            # unreadable from here and this gate has inspected nothing.
+            # Exiting 0 there would be a green check that read no commits.
+            if [ "$EVENT_NAME" != "pull_request" ] && [ "$NARROWED_TO_HEAD" -eq 1 ]; then
+              echo "ERROR: this push touched spec/ (that is the only reason this"
+              echo "       workflow ran), the range it introduced could not be"
+              echo "       resolved, and head ${PUSH_AFTER} does not touch spec/"
+              echo "       itself. The commits that did are not readable here,"
+              echo "       so this gate has checked nothing. Refusing to pass."
+              echo
+              echo "       Re-push the branch on top of the default branch so the"
+              echo "       range resolves, or land the change through the"
+              echo "       spec bot's pull request."
+              exit 1
+            fi
+            echo "No commits in ${INSPECTED_RANGE} touch spec/, nothing to check."
+            exit 0
+          fi
+
+          echo "Commits touching spec/ (event: $EVENT_NAME):"
+          echo "$VENDOR_COMMITS"
+          echo
+
+          # ---------- Rollback allowance ----------
+          # An emergency revert of a bad spec vendor is authored by a human
+          # and titled `Revert "..."`, so it violates BOTH gates. Without an
+          # escape hatch the only way to roll back is to disable this
+          # workflow, and a gate people have to disable is a dead gate.
+          #
+          # The allowance is deliberately narrow: it is NOT a subject-pattern
+          # match on "Revert", which a human could type over arbitrary
+          # content. A commit is exempt only when its resulting spec/ TREE is
+          # byte-identical to the spec/ tree of a recent ancestor that the
+          # bot itself authored. You may return spec/ to a state this gate
+          # already admitted; you may not introduce a new one. Reverting
+          # something older than ROLLBACK_SEARCH_DEPTH spec commits is not
+          # covered; refresh through the spec bot instead.
+          is_rollback_to_admitted_state() {
+            SHA="$1"
+            TREE=$(git rev-parse "${SHA}:spec" 2>/dev/null) || return 1
+            ANCESTORS=$(git log "${SHA}^" --format='%H' \
+              -n "$ROLLBACK_SEARCH_DEPTH" -- 'spec/' 2>/dev/null) || return 1
+            for ANC in $ANCESTORS; do
+              ANC_TREE=$(git rev-parse "${ANC}:spec" 2>/dev/null) || continue
+              [ "$ANC_TREE" = "$TREE" ] || continue
+              ANC_AUTHOR=$(git log -1 --format='%an <%ae>' "$ANC")
+              if [ "$ANC_AUTHOR" = "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_EMAIL>" ]; then
+                echo "  $SHA restores the spec/ tree of bot-authored $ANC (rollback allowed)"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          GATED_COMMITS=""
+          for SHA in $VENDOR_COMMITS; do
+            if is_rollback_to_admitted_state "$SHA"; then
+              continue
+            fi
+            GATED_COMMITS="$GATED_COMMITS $SHA"
+          done
+
+          if [ -z "$GATED_COMMITS" ]; then
+            echo "All spec/ commits are rollbacks to previously admitted state."
+            exit 0
+          fi
+
+          # ---------- Identity gate ----------
+          # Two layers, matching the claim above: the PR must be opened by
+          # the spec bot, and every commit touching spec/ must carry the
+          # bot's git author identity, so a bot-authored PR cannot smuggle a
+          # human commit into the vendored tree. A maintainer can override by
+          # attaching the spec-mirror-override label.
+          OVERRIDE_APPLIED=0
+          case ",$PR_LABELS," in
+            *",${OVERRIDE_LABEL},"*)
+              OVERRIDE_APPLIED=1
+              echo "Identity gate: bypassed by ${OVERRIDE_LABEL} label (maintainer override)"
+              ;;
+          esac
+
+          if [ "$OVERRIDE_APPLIED" -ne 1 ]; then
+            # The PR-author layer is a pull_request concept. On push there is
+            # no PR to attribute, so the per-commit author gate below is the
+            # whole identity check; it is also the stronger of the two.
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              if [ "$PR_AUTHOR" != "$ALLOWED_BOT_LOGIN" ]; then
+                echo "ERROR: PR touches spec/ but is authored by '$PR_AUTHOR',"
+                echo "       not '$ALLOWED_BOT_LOGIN'."
+                echo
+                echo "spec/ is written exclusively by the EzClassify spec bot"
+                echo "under the ezclassify-spec-bot GitHub App identity, from"
+                echo "source of record in ezclassify/contracts."
+                echo
+                echo "A maintainer who must land this change can attach the"
+                echo "'${OVERRIDE_LABEL}' label to bypass the identity gate."
+                exit 1
+              fi
+              echo "Identity gate: PR authored by ${ALLOWED_BOT_LOGIN}"
+            fi
+
+            BAD_AUTHORS=""
+            for SHA in $GATED_COMMITS; do
+              AUTHOR=$(git log -1 --format='%an <%ae>' "$SHA")
+              if [ "$AUTHOR" != "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_EMAIL>" ]; then
+                BAD_AUTHORS="$BAD_AUTHORS  $SHA  $AUTHOR"$'\n'
+              fi
+            done
+            if [ -n "$BAD_AUTHORS" ]; then
+              echo "ERROR: spec/-touching commits not authored by the spec bot:"
+              printf "%s" "$BAD_AUTHORS"
+              echo
+              echo "Every commit touching spec/ must be authored as"
+              echo "'$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_EMAIL>'. Refresh the"
+              echo "mirror through the spec bot."
+              exit 1
+            fi
+            echo "Identity gate: all spec/ commits authored by ${ALLOWED_BOT_LOGIN}"
+          fi
+
+          # ---------- Commit-subject gate ----------
+          # Every commit touching spec/ must have a subject starting with
+          # `chore(spec):`. A second accident check, not a second
+          # authentication factor: it catches a commit that reached spec/ by
+          # some route other than the spec bot, such as a rebase that
+          # dragged the mirror along, a merge, or a hand-edit that copied the
+          # author identity and kept its own subject. Anyone who can set the
+          # author header can also type this subject, so the two gates are one
+          # control against mistakes rather than two hurdles for an attacker.
+          # See the header.
+          DISALLOWED=""
+          for SHA in $GATED_COMMITS; do
+            SUBJECT=$(git log -1 --format='%s' "$SHA")
+            if ! echo "$SUBJECT" | grep -qE '^chore\(spec\):'; then
+              DISALLOWED="$DISALLOWED  $SHA  $SUBJECT"$'\n'
+            fi
+          done
+
+          if [ -n "$DISALLOWED" ]; then
+            echo
+            echo "ERROR: spec/-touching commits with disallowed subject:"
+            printf "%s" "$DISALLOWED"
+            echo
+            echo "Every commit touching spec/ must have a subject starting with"
+            echo "'chore(spec):'. Refresh the mirror through the spec bot."
+            exit 1
+          fi
+
+          echo "All spec/ commits pass identity + subject gates."

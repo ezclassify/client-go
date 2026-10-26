@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, not nightly: push + PR runs are the primary gate; the schedule
+    # exists only so the regen-and-diff steps below catch vendored-spec or
+    # generator drift between pushes.
+    - cron: '0 9 * * 0'   # Sunday 09:00 UTC; only fires on the repo's default branch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ github.event_name != 'schedule' || github.repository_owner == 'ezclassify' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Generation and consumer tests use the supported, patched Go floor.
+      - name: Set up Go for code generation
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26.10"
+          cache: true
+
+      # Regen check. Verifies that generated code matches what the generator
+      # produces from spec/openapi.yaml; fails on hand-edits or template
+      # tampering.
+      - name: Read MANIFEST
+        id: manifest
+        run: |
+          python3 -c "
+          import json, os
+          m = json.load(open('spec/MANIFEST.json'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('go_version=' + m['generators']['go']['version'] + '\n')
+              f.write('expected_hash=' + m['generators']['go']['sha256'] + '\n')
+              f.write('spec_sha256=' + m['openapiSha256'] + '\n')
+          "
+
+      # MANIFEST-derived values reach the scripts below via env, never inline
+      # ${{ }} interpolation, so a PR editing spec/MANIFEST.json cannot inject
+      # shell into the run steps.
+      - name: Verify spec hash
+        env:
+          EXPECTED_SPEC_SHA256: ${{ steps.manifest.outputs.spec_sha256 }}
+        run: |
+          ACTUAL=$(sha256sum spec/openapi.yaml | awk '{print $1}')
+          if [ "$EXPECTED_SPEC_SHA256" != "$ACTUAL" ]; then
+            echo "ERROR: spec/openapi.yaml SHA mismatch"
+            echo "  MANIFEST: $EXPECTED_SPEC_SHA256"
+            echo "  actual:   $ACTUAL"
+            exit 1
+          fi
+
+      - name: Verify generator module hash
+        env:
+          GEN_VER: ${{ steps.manifest.outputs.go_version }}
+          EXPECTED: ${{ steps.manifest.outputs.expected_hash }}
+        run: |
+          ACTUAL=$(go mod download -json "github.com/oapi-codegen/oapi-codegen/v2@${GEN_VER}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Sum'])")
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "ERROR: generator module hash mismatch"
+            echo "  MANIFEST: $EXPECTED"
+            echo "  actual:   $ACTUAL"
+            exit 1
+          fi
+
+      - name: Regenerate
+        run: bash scripts/regen.sh
+
+      - name: Check for unexpected changes
+        run: |
+          if ! git diff --exit-code; then
+            echo ""
+            echo "ERROR: Generated code differs from committed tree."
+            echo "Run 'bash scripts/regen.sh' locally and commit the result."
+            exit 1
+          fi
+
+      - name: Set up minimum supported Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26.10"
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      # 1.0 public-surface freeze: the exported API of the root package is a locked
+      # contract. tools/apisurface diffs the live surface against api/1.0.txt
+      # and fails on unreviewed drift; regenerate deliberately with
+      # 'make api-surface' after an API review.
+      - name: API surface (1.0 freeze)
+        run: go run ./tools/apisurface
+
+      - name: Format
+        # vendor/ carries upstream module sources verbatim, so the gofmt gate
+        # covers first-party code only.
+        run: test -z "$(gofmt -l . | grep -v '^vendor/')"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      # Examples gate: the three examples/ demos are main packages in this
+      # module, so the Build step above already compiles and links them
+      # registry-free (dependencies come from vendor/). This step additionally
+      # executes each binary and asserts its documented flag surface, proving
+      # the entrypoints run. Driving the examples against a live server is the
+      # smoke suite's job (`make smoke URL=...`), not this step's.
+      - name: Examples (build + startup smoke)
+        run: |
+          for ex in basic go-classify server-tour; do
+            go build -o "$RUNNER_TEMP/ezc-example-$ex" "./examples/$ex"
+            out=$("$RUNNER_TEMP/ezc-example-$ex" -h 2>&1) || { echo "$ex: -h exited $?"; echo "$out"; exit 1; }
+            echo "$out" | grep -q -- '-server' || { echo "$ex: usage is missing the -server flag"; exit 1; }
+            echo "smoke ok: $ex"
+          done
+
+      # License gate + notices freshness: tools/notices resolves the
+      # production dependency closure (go list -mod=vendor -deps .),
+      # fails on any license outside the allowlist, and verifies the committed
+      # THIRD-PARTY-NOTICES.md matches the vendored module set. Regenerate
+      # deliberately with 'make notices' after a dependency change.
+      - name: Dependency licenses + third-party notices
+        run: go run ./tools/notices
+
+      # CycloneDX SBOM for the module. The
+      # generator is a CI-only tool, not a dependency of the SDK.
+      # cyclonedx-gomod re-runs 'go mod vendor' internally; it runs against a
+      # disposable copy of the checkout so the committed vendor/ tree stays
+      # byte-identical for the clean-tree gate below.
+      - name: Generate SBOM
+        run: |
+          cp -a "$PWD" "$RUNNER_TEMP/sbom-src"
+          cd "$RUNNER_TEMP/sbom-src"
+          go run -mod=readonly -modfile=tools/sbom/go.mod github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod mod -json -output "$RUNNER_TEMP/sbom.json" .
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom.json
+
+      # Vulnerability scan. govulncheck reports findings the build actually
+      # reaches, in the dependency closure and in the standard library of
+      # whatever toolchain it runs under. Scanning under an unsupported consumer
+      # floor would therefore report every advisory fixed after that release went out
+      # of support, drowning the real dependency signal, so this step runs
+      # last and brings its own current toolchain. Everything above it still
+      # builds and tests against the floor.
+      #
+      # This is the one toolchain in the workflow that is not pinned: a
+      # security gate wants the newest patch release, because that is the
+      # release the advisory database expects a stdlib finding to be fixed in.
+      # setup-go fetches it directly, so the gate does not wait on the runner
+      # image to catch up. The scanner itself stays pinned, like the SBOM
+      # generator above, and is a CI-only tool rather than a dependency of the
+      # SDK.
+      - name: Set up current Go for the vulnerability scan
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "stable"
+          cache: true
+
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+      - name: Working tree is clean after build
+        run: git diff --exit-code && test -z "$(git status --porcelain)"

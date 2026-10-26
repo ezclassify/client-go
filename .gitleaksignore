@@ -1,0 +1,5 @@
+# Historical semantic-contract SHA constants misidentified as API keys. Exact
+# fingerprints keep new findings in the same test visible.
+dd00d23923451e9634f322a9e6159b13a4b5d5c2:document_semantic_conformance_test.go:generic-api-key:32
+6d2df5f91478f1a13353c850b78c82caf020762f:document_semantic_conformance_test.go:generic-api-key:32
+dcd225abbb931f61806630635f3c5a28e2d9470e:document_semantic_conformance_test.go:generic-api-key:32

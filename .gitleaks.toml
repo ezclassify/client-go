@@ -1,0 +1,28 @@
+# Gitleaks config for the secret-scan workflow. Extends the default ruleset;
+# every entry below suppresses a known false positive, never a real credential.
+
+[extend]
+useDefault = true
+
+# Historical commits pinned the semantic OpenAPI content digest in this test.
+# Full-history scans still inspect it after the constant's removal.
+[[allowlists]]
+description = "Historical semantic OpenAPI test digest"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''document_semantic_conformance_test\.go''']
+regexes = ['''\b[a-f0-9]{64}\b''']
+
+[[allowlists]]
+description = "OpenAPI content digest in the vendored manifest"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''(?:vendor/)?spec/MANIFEST\.json''']
+regexes = ['''\b[a-f0-9]{64}\b''']
+
+[[allowlists]]
+description = "SHA-256 replayer lookup-key example"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''(?:vendor/)?spec/replayer-contract/v1/README\.md''']
+regexes = ['''\b[a-f0-9]{64}\b''']

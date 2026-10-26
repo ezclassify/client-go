@@ -1,0 +1,31 @@
+version: 2
+
+# Minor and patch updates arrive grouped; major updates arrive one PR at a
+# time so each one is reviewed on its own. Nothing is ignored: a blanket
+# major-version ignore hides the update that carries the fix. Every PR runs
+# the full CI job, which builds and tests against the module's supported Go
+# floor and runs govulncheck over the resulting closure, so a
+# bump that breaks portability or pulls in a known vulnerability fails before
+# review.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      gomod:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [dependencies]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ['*']
+        update-types: [minor, patch]
+    labels: [dependencies, ci]

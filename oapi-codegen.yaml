@@ -1,0 +1,32 @@
+# oapi-codegen configuration for the EzClassify Go SDK.
+#
+# Regenerate with `make regen`, which pins and runs oapi-codegen v2.
+#
+# Input: the canonical REST API OpenAPI spec.
+# Output: typed Go structs for every request/response schema and a thin
+# *Client + *ClientWithResponses pair that calls each operation. The
+# generated file is the single source of truth for wire DTOs and the HTTP
+# plumbing. Do not hand-edit it.
+
+package: api
+generate:
+  models: true
+  client: true
+output-options:
+  skip-prune: true
+  # Emit Go-idiomatic initialisms in generated identifiers: `ID` not `Id`,
+  # `SHA` not `Sha`, `URL` not `Url` (per Effective Go / golint). This is the
+  # generation-side fix: the generated file stays the single source of truth,
+  # so the DTO field names and *ByID* method names read idiomatically without
+  # any hand-patching. `SHA` is not in oapi-codegen's built-in initialisms
+  # list, so it is added explicitly; `ID` already is.
+  name-normalizer: ToCamelCaseWithInitialisms
+  additional-initialisms:
+    - SHA
+  # The OpenAPI spec defines schema types whose names already end in
+  # "Response" (e.g. NormalizeResponse, GuideViewResponse). The
+  # client generator's auto-generated per-operation HTTP-response wrappers
+  # would collide with those by default, so suffix the wrappers with HTTP
+  # to keep the wire DTOs untouched and the wrappers distinct.
+  response-type-suffix: HTTP
+output: internal/api/api.gen.go
