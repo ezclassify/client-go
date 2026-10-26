@@ -109,6 +109,12 @@ func TestVendorGateShape(t *testing.T) {
 		}
 	})
 
+	t.Run("pins the GitHub squash bot account", func(t *testing.T) {
+		if !strings.Contains(workflow, "ALLOWED_BOT_CANONICAL_EMAIL: 348097708+ezclassify-spec-bot[bot]@users.noreply.github.com") {
+			t.Fatal("the workflow must pin the verified spec-bot account ID and address")
+		}
+	})
+
 	t.Run("reads the head commit with diff-tree, never a walking log", func(t *testing.T) {
 		// `git log -1 <sha> -- <paths>` walks past <sha> to the nearest
 		// ancestor that touched <paths>. `diff-tree` asks only what this one
@@ -270,6 +276,18 @@ func TestVendorGateBehavior(t *testing.T) {
 		"chore(spec): vendor spec bundle from contracts@bbbbbbbb",
 		"spec/SPEC.md", "two\n")
 
+	canonicalBot := repo.commit(botName, "348097708+ezclassify-spec-bot[bot]@users.noreply.github.com",
+		"chore(spec): vendor contracts@deadbeef (#9)", "spec/SPEC.md", "canonical\n")
+	wrongID := repo.commit(botName, "348097709+"+botEmail,
+		"chore(spec): vendor contracts@deadbeef (#9)", "spec/SPEC.md", "wrong ID\n")
+	wrongAddress := repo.commit(botName, "348097708+other-bot[bot]@users.noreply.github.com",
+		"chore(spec): vendor contracts@deadbeef (#9)", "spec/SPEC.md", "wrong address\n")
+	wrongName := repo.commit("Other Bot", "348097708+ezclassify-spec-bot[bot]@users.noreply.github.com",
+		"chore(spec): vendor contracts@deadbeef (#9)", "spec/SPEC.md", "wrong name\n")
+
+	canonicalRollback := repo.commit("Someone", "someone@example.com",
+		`Revert "chore(spec): vendor contracts@deadbeef (#9)"`, "spec/SPEC.md", "canonical\n")
+
 	cases := []struct {
 		name        string
 		event       string
@@ -346,6 +364,32 @@ func TestVendorGateBehavior(t *testing.T) {
 			before: botSpec, after: nonSpec, wantExit: 0,
 			wantOutput: []string{"nothing to check"},
 		},
+
+		{
+			name: "allows exact-tree rollback to canonical bot ancestor", event: "push",
+			before: wrongName, after: canonicalRollback, wantExit: 0,
+			wantOutput: []string{"rollback allowed"},
+		},
+
+		{
+			name: "admits exact GitHub squash bot identity", event: "push",
+			before: botOnBranch, after: canonicalBot, wantExit: 0,
+		},
+		{
+			name: "refuses another numeric bot ID", event: "push",
+			before: canonicalBot, after: wrongID, wantExit: 1,
+			wantOutput: []string{"not authored by the spec bot"},
+		},
+		{
+			name: "refuses another canonical address", event: "push",
+			before: wrongID, after: wrongAddress, wantExit: 1,
+			wantOutput: []string{"not authored by the spec bot"},
+		},
+		{
+			name: "refuses canonical address under another name", event: "push",
+			before: wrongAddress, after: wrongName, wantExit: 1,
+			wantOutput: []string{"not authored by the spec bot"},
+		},
 	}
 
 	for _, testCase := range cases {
@@ -366,6 +410,7 @@ func TestVendorGateBehavior(t *testing.T) {
 				"ROLLBACK_SEARCH_DEPTH=50",
 				"ALLOWED_BOT_LOGIN="+botName,
 				"ALLOWED_BOT_EMAIL="+botEmail,
+				"ALLOWED_BOT_CANONICAL_EMAIL=348097708+ezclassify-spec-bot[bot]@users.noreply.github.com",
 				"OVERRIDE_LABEL=spec-mirror-override",
 			)
 			combined, runErr := cmd.CombinedOutput()

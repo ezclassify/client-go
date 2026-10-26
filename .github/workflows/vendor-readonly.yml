@@ -5,6 +5,10 @@ name: vendor-readonly
 # written exclusively by the EzClassify spec bot under the
 # `ezclassify-spec-bot` GitHub App identity.
 #
+# Exact admitted bot author addresses: the App-created short address and
+# 348097708+ezclassify-spec-bot[bot]@users.noreply.github.com on GitHub squash.
+# Both require the exact bot name; other numeric IDs/addresses are refused.
+#
 # Two gates run in series:
 #   1. Identity gate: every commit touching spec/ must be authored by
 #      `ezclassify-spec-bot[bot]` (or a maintainer attaches the
@@ -80,6 +84,9 @@ jobs:
           # The exact git identity the spec bot commits with; the per-commit
           # gate matches it.
           ALLOWED_BOT_EMAIL: ezclassify-spec-bot[bot]@users.noreply.github.com
+          # GitHub preserves this verified bot account when squash-merging its PR.
+          # Admit only this exact ID/address, never an arbitrary numeric prefix.
+          ALLOWED_BOT_CANONICAL_EMAIL: 348097708+ezclassify-spec-bot[bot]@users.noreply.github.com
           OVERRIDE_LABEL: spec-mirror-override
         run: |
           set -euo pipefail
@@ -221,7 +228,8 @@ jobs:
               ANC_TREE=$(git rev-parse "${ANC}:spec" 2>/dev/null) || continue
               [ "$ANC_TREE" = "$TREE" ] || continue
               ANC_AUTHOR=$(git log -1 --format='%an <%ae>' "$ANC")
-              if [ "$ANC_AUTHOR" = "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_EMAIL>" ]; then
+              if [ "$ANC_AUTHOR" = "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_EMAIL>" ] ||
+                   [ "$ANC_AUTHOR" = "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_CANONICAL_EMAIL>" ]; then
                 echo "  $SHA restores the spec/ tree of bot-authored $ANC (rollback allowed)"
                 return 0
               fi
@@ -279,7 +287,8 @@ jobs:
             BAD_AUTHORS=""
             for SHA in $GATED_COMMITS; do
               AUTHOR=$(git log -1 --format='%an <%ae>' "$SHA")
-              if [ "$AUTHOR" != "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_EMAIL>" ]; then
+              if [ "$AUTHOR" != "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_EMAIL>" ] &&
+                 [ "$AUTHOR" != "$ALLOWED_BOT_LOGIN <$ALLOWED_BOT_CANONICAL_EMAIL>" ]; then
                 BAD_AUTHORS="$BAD_AUTHORS  $SHA  $AUTHOR"$'\n'
               fi
             done
