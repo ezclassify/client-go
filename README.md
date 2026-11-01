@@ -377,7 +377,7 @@ Operations with no REST endpoint (registry mutation, in-process scheme loading, 
 
 ## Authentication
 
-Use `RestClientCredentials` for the two independent credentials. `AccessToken` is sent as a bearer token on every REST request. `ContextToken` is sent as `x-ezclassify-context-token` only on `/v1/ctx` routes, so it cannot leak to health or other route families:
+Use `RestClientCredentials` for ordinary caller and Context tokens, or a managed application credential. `AccessToken` is sent as a bearer token on every REST request. `ContextToken` is sent as `x-ezclassify-context-token` only on `/v1/ctx` routes, so it cannot leak to health or other route families:
 
 ```go
 client := ezclassify.New(baseURL, ezclassify.WithCredentials(ezclassify.RestClientCredentials{
@@ -385,6 +385,16 @@ client := ezclassify.New(baseURL, ezclassify.WithCredentials(ezclassify.RestClie
 	ContextToken: contextToken,
 }))
 ```
+
+For a managed application, use the opaque credential issued by your deployment's management plane instead of both tokens:
+
+```go
+client := ezclassify.New(baseURL, ezclassify.WithCredentials(ezclassify.RestClientCredentials{
+	ApplicationCredential: os.Getenv("EZCLASSIFY_APPLICATION_CREDENTIAL"),
+}))
+```
+
+The SDK sends it as `x-ezclassify-application-grant` only to Context routes on the configured origin, including deployments under a base path. It does not decode or refresh the credential. Combining it with `AccessToken` or `ContextToken` is rejected before any request. The credential identifies the calling application; your application owns its user authentication. A transport supplied with `WithHTTPClient` receives the credential on Context requests; what it does with that credential, including logging, is the caller's responsibility. Headers the transport adds or changes are outside construction-time credential validation.
 
 The zero-value credential struct is valid for an unauthenticated local runtime. Blank non-empty tokens are rejected. Use `WithHTTPClient` when you also need a custom transport, retry policy, cookie jar, or redirect policy:
 

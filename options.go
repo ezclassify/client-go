@@ -54,13 +54,13 @@ func resolveOptions(opts []Option) clientConfig {
 // the connection and then stays silent.
 const defaultTimeout = 30 * time.Second
 
-// WithCredentials sets the caller and Context credentials. AccessToken is sent
-// as a bearer token on every REST request and ContextToken only on Context
-// routes; see [RestClientCredentials]. The zero value sends neither, which
-// suits an unauthenticated local runtime.
+// WithCredentials sets caller and Context credentials or one managed application
+// credential; see [RestClientCredentials] for route scoping and mutually exclusive
+// modes. The zero value sends no credentials, which suits an unauthenticated
+// local runtime.
 //
-// WithCredentials panics on a blank non-empty token, which is a programming
-// error: it could never be sent as a header.
+// WithCredentials panics on mixed credential modes, a blank non-empty value,
+// or a value containing control characters. These are programming errors.
 func WithCredentials(credentials RestClientCredentials) Option {
 	if err := credentials.validate(); err != nil {
 		panic("ezclassify: " + err.Error())
