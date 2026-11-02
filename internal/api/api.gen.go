@@ -1,4 +1,4 @@
-// Code generated from openapi.yaml@da547a662ab79fa3f79f7d1a53a0b6a2823b0cd001d15e3d5de2aa90a7da96ff by oapi-codegen@v2.8.0@h1:s4hxMxuqtR8jPzXkBTtFwY/SBuj3gEAYikmbBSdtLMM=. DO NOT EDIT.
+// Code generated from openapi.yaml@cf1679c6bae46071cec779c7864802568a3f517aea6b3cc7a2a634de512c6e61 by oapi-codegen@v2.8.0@h1:s4hxMxuqtR8jPzXkBTtFwY/SBuj3gEAYikmbBSdtLMM=. DO NOT EDIT.
 // Package api provides primitives to interact with the openapi HTTP API.
 package api
 
