@@ -33,12 +33,14 @@ type PingResult struct {
 	GitTag string
 }
 
-// RestClientCredentials carries independent caller identity and Context
-// authorization. AccessToken is sent as a bearer token on every REST request.
-// ContextToken is sent only to /v1/ctx and its descendants.
+// RestClientCredentials carries caller identity and Context authorization, or
+// an opaque managed application credential. AccessToken is sent as a bearer
+// token on every REST request. ContextToken and ApplicationCredential are sent
+// only to /v1/ctx and its descendants. ApplicationCredential cannot be combined
+// with either token.
 //
-// Both are attached only to requests whose scheme and host match the client's
-// base URL. A redirect to another origin is passed through without them.
+// Credentials are attached only to requests whose scheme and host match the
+// client's base URL. A redirect to another origin is passed through without them.
 //
 // The zero value is valid and configures an unauthenticated client. A supplied
 // token must contain at least one non-whitespace character and no control
@@ -48,11 +50,24 @@ type RestClientCredentials struct {
 	AccessToken string
 	// ContextToken authorizes Context operations and is sent only on /v1/ctx routes.
 	ContextToken string
+	// ApplicationCredential authorizes the calling application on Context routes.
+	// The SDK sends its opaque value without decoding or refreshing it.
+	ApplicationCredential string
 }
 
 const contextTokenHeader = "x-ezclassify-context-token"
+const applicationCredentialHeader = "x-ezclassify-application-grant"
 
 func (c RestClientCredentials) validate() error {
+	if c.ApplicationCredential != "" && (c.AccessToken != "" || c.ContextToken != "") {
+		return fmt.Errorf("application credential cannot be combined with access or context tokens")
+	}
+	if c.ApplicationCredential != strings.TrimSpace(c.ApplicationCredential) {
+		return fmt.Errorf("application credential must not have leading or trailing whitespace")
+	}
+	if strings.ContainsRune(c.ApplicationCredential, '\t') || !validHeaderValue(c.ApplicationCredential) {
+		return fmt.Errorf("application credential must not contain control characters")
+	}
 	if c.AccessToken != "" && strings.TrimSpace(c.AccessToken) == "" {
 		return fmt.Errorf("access token must be empty or non-blank")
 	}
@@ -298,6 +313,9 @@ func New(baseURL string, opts ...Option) *Client {
 		}
 		if isContextPath(contextRoot, req.URL.Path) && credentials.ContextToken != "" {
 			req.Header.Set(contextTokenHeader, credentials.ContextToken)
+		}
+		if isContextPath(contextRoot, req.URL.Path) && credentials.ApplicationCredential != "" {
+			req.Header.Set(applicationCredentialHeader, credentials.ApplicationCredential)
 		}
 		return capResponse(roundTripWithin(baseTransport, req))
 	})

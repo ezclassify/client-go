@@ -161,3 +161,107 @@ func TestRestClientCredentialsRejectControlCharacters(t *testing.T) {
 		})
 	}
 }
+
+func TestApplicationCredentialIsOpaqueAndScopedToContextRoutes(t *testing.T) {
+	for _, prefix := range []string{"", "/api"} {
+		t.Run(prefix, func(t *testing.T) {
+			seen := make(map[string]http.Header)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen[r.URL.Path] = r.Header.Clone()
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"contexts":[]}`)
+			}))
+			t.Cleanup(srv.Close)
+			credentials := RestClientCredentials{ApplicationCredential: "opaque.not-decoded.value"}
+			client := New(srv.URL+prefix, WithCredentials(credentials))
+			credentials.ApplicationCredential = "changed-after-construction"
+			if _, err := client.ListContexts(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			paths := []string{"/v1/health", "/v1/live", "/v1/ready", "/v1/ctx/example/1.0.0", "/v1/ctx-extra", "/other/v1/ctx"}
+			for i := range paths {
+				paths[i] = prefix + paths[i]
+			}
+			if prefix != "" {
+				paths = append(paths, "/v1/ctx")
+			}
+			for _, path := range paths {
+				response, err := client.httpClient.Get(srv.URL + path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = response.Body.Close()
+			}
+			for path, headers := range seen {
+				want := ""
+				if path == prefix+"/v1/ctx" || path == prefix+"/v1/ctx/example/1.0.0" {
+					want = "opaque.not-decoded.value"
+				}
+				if got := headers.Get(applicationCredentialHeader); got != want {
+					t.Errorf("%s application credential = %q, want %q", path, got, want)
+				}
+				if headers.Get("Authorization") != "" || headers.Get(contextTokenHeader) != "" {
+					t.Errorf("%s carried ordinary credentials in application mode", path)
+				}
+			}
+			if len(seen) != len(paths)+1 {
+				t.Fatalf("observed %d requests, want %d", len(seen), len(paths)+1)
+			}
+		})
+	}
+}
+
+func TestApplicationCredentialRejectsInvalidConfigurationBeforeTransport(t *testing.T) {
+	for name, credentials := range map[string]RestClientCredentials{
+		"access token":        {ApplicationCredential: "opaque", AccessToken: "access"},
+		"context token":       {ApplicationCredential: "opaque", ContextToken: "context"},
+		"both tokens":         {ApplicationCredential: "opaque", AccessToken: "access", ContextToken: "context"},
+		"embedded tab":        {ApplicationCredential: "opa\tque"},
+		"leading whitespace":  {ApplicationCredential: " opaque"},
+		"trailing whitespace": {ApplicationCredential: "opaque "},
+		"blank":               {ApplicationCredential: " \t"},
+		"newline":             {ApplicationCredential: "opaque\n"},
+		"null":                {ApplicationCredential: "opa\x00que"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			transport := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, nil
+			})
+			var refusal any
+			func() {
+				defer func() { refusal = recover() }()
+				_ = New("http://localhost", WithHTTPClient(&http.Client{Transport: transport}), WithCredentials(credentials))
+			}()
+			if refusal == nil {
+				t.Fatal("constructor accepted invalid application credentials")
+			}
+			if calls != 0 {
+				t.Fatalf("invalid configuration made %d transport calls", calls)
+			}
+		})
+	}
+}
+
+func TestApplicationCredentialDoesNotFollowCrossOriginRedirect(t *testing.T) {
+	var sourceValue, targetValue string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetValue = r.Header.Get(applicationCredentialHeader)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"contexts":[]}`)
+	}))
+	t.Cleanup(target.Close)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sourceValue = r.Header.Get(applicationCredentialHeader)
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(origin.Close)
+	client := New(origin.URL, WithCredentials(RestClientCredentials{ApplicationCredential: "opaque"}))
+	if _, err := client.ListContexts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sourceValue != "opaque" || targetValue != "" {
+		t.Fatalf("credential at origin=%q, redirect target=%q", sourceValue, targetValue)
+	}
+}

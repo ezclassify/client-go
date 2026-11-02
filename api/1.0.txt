@@ -326,6 +326,7 @@ ezclassify, type ReproducibleRuleSourceReference = api.ReproducibleRuleSourceRef
 ezclassify, type ReproducibleSourceReference = api.ReproducibleSourceReference
 ezclassify, type RestClientCredentials struct
 ezclassify, type RestClientCredentials struct, AccessToken string
+ezclassify, type RestClientCredentials struct, ApplicationCredential string
 ezclassify, type RestClientCredentials struct, ContextToken string
 ezclassify, type RuleDescription = api.RuleDescription
 ezclassify, type RuleReference = api.RuleReference

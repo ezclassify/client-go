@@ -114,6 +114,24 @@ jobs:
       # contract. tools/apisurface diffs the live surface against api/1.0.txt
       # and fails on unreviewed drift; regenerate deliberately with
       # 'make api-surface' after an API review.
+      - name: Retain the owning native API surface proposal
+        run: |
+          mkdir "$RUNNER_TEMP/api-surface-source" "$RUNNER_TEMP/api-surface-proposal"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/api-surface-source"
+          make -C "$RUNNER_TEMP/api-surface-source" api-surface
+          cp "$RUNNER_TEMP/api-surface-source/api/1.0.txt" "$RUNNER_TEMP/api-surface-proposal/1.0.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/api-surface-proposal/source-sha"
+          cd "$RUNNER_TEMP/api-surface-proposal"
+          sha256sum 1.0.txt > SHA256SUMS
+
+      - name: Upload native API surface proposal
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: api-surface-proposal
+          path: ${{ runner.temp }}/api-surface-proposal
+          if-no-files-found: error
+          retention-days: 7
+
       - name: API surface (1.0 freeze)
         run: go run ./tools/apisurface
 
