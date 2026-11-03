@@ -213,7 +213,6 @@ func TestApplicationCredentialIsOpaqueAndScopedToContextRoutes(t *testing.T) {
 
 func TestApplicationCredentialRejectsInvalidConfigurationBeforeTransport(t *testing.T) {
 	for name, credentials := range map[string]RestClientCredentials{
-		"access token":        {ApplicationCredential: "opaque", AccessToken: "access"},
 		"context token":       {ApplicationCredential: "opaque", ContextToken: "context"},
 		"both tokens":         {ApplicationCredential: "opaque", AccessToken: "access", ContextToken: "context"},
 		"embedded tab":        {ApplicationCredential: "opa\tque"},
@@ -263,5 +262,64 @@ func TestApplicationCredentialDoesNotFollowCrossOriginRedirect(t *testing.T) {
 	}
 	if sourceValue != "opaque" || targetValue != "" {
 		t.Fatalf("credential at origin=%q, redirect target=%q", sourceValue, targetValue)
+	}
+}
+
+func TestApplicationAndUserCredentialsStayCallerScoped(t *testing.T) {
+	var seen []http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Clone())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"contexts":[]}`)
+	}))
+	t.Cleanup(server.Close)
+	for _, user := range []string{"caller-a", "caller-b"} {
+		client := New(server.URL, WithCredentials(RestClientCredentials{ApplicationCredential: "shared-application", AccessToken: user}))
+		if _, err := client.ListContexts(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.httpClient.Get(server.URL + "/v1/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+	}
+	if len(seen) != 4 {
+		t.Fatalf("observed %d requests, want 4", len(seen))
+	}
+	for i, user := range []string{"caller-a", "caller-b"} {
+		for _, headers := range seen[i*2 : i*2+2] {
+			if headers.Get("Authorization") != "Bearer "+user || headers.Get(contextTokenHeader) != "" {
+				t.Fatalf("caller %d lost its independent user credential", i)
+			}
+		}
+		if seen[i*2].Get(applicationCredentialHeader) != "shared-application" || seen[i*2+1].Get(applicationCredentialHeader) != "" {
+			t.Fatalf("caller %d application grant escaped Context routes", i)
+		}
+	}
+}
+
+func TestApplicationAndUserCredentialsDoNotFollowCrossOriginRedirect(t *testing.T) {
+	var originHeaders, targetHeaders http.Header
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"contexts":[]}`)
+	}))
+	t.Cleanup(target.Close)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHeaders = r.Header.Clone()
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(origin.Close)
+	client := New(origin.URL, WithCredentials(RestClientCredentials{ApplicationCredential: "application", AccessToken: "caller"}))
+	if _, err := client.ListContexts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if originHeaders.Get(applicationCredentialHeader) != "application" || originHeaders.Get("Authorization") != "Bearer caller" {
+		t.Fatal("origin did not receive both configured credentials")
+	}
+	if targetHeaders.Get(applicationCredentialHeader) != "" || targetHeaders.Get("Authorization") != "" {
+		t.Fatal("redirect target received credentials")
 	}
 }

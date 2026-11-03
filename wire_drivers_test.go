@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	ez "github.com/ezclassify/client-go"
+	"maps"
 	"net/url"
 	"strings"
 )
@@ -188,7 +189,16 @@ func wireOptionalQuery(u *url.URL, key string) *string {
 }
 func runWireDriver(ctx context.Context, c *ez.Client, r wireCase) (interface{}, error) {
 	if wireDrivers[r.ID] != publicDriver {
-		b, status, e := ez.WireReplayRequestForTest(ctx, c, r.Request.Method, r.Request.Path, r.Request.Headers, r.Request.Body)
+		headers := maps.Clone(r.Request.Headers)
+		if r.Auth.Credential == "context-token" && !strings.HasPrefix(r.Request.Path, "/v1/ctx") {
+			// The recording explicitly presents this carrier on a route the
+			// SDK does not expose. Automatic credentials stay Context-scoped.
+			if headers == nil {
+				headers = make(map[string]string)
+			}
+			headers["x-ezclassify-context-token"] = wireCredentials(r).ContextToken
+		}
+		b, status, e := ez.WireReplayRequestForTest(ctx, c, r.Request.Method, r.Request.Path, headers, r.Request.Body)
 		if e != nil {
 			return nil, e
 		}
