@@ -190,13 +190,13 @@ func wireOptionalQuery(u *url.URL, key string) *string {
 func runWireDriver(ctx context.Context, c *ez.Client, r wireCase) (interface{}, error) {
 	if wireDrivers[r.ID] != publicDriver {
 		headers := maps.Clone(r.Request.Headers)
-		if r.Auth.Credential == "context-token" && !strings.HasPrefix(r.Request.Path, "/v1/ctx") {
-			// The recording explicitly presents this carrier on a route the
-			// SDK does not expose. Automatic credentials stay Context-scoped.
+		if token := wireCredentials(r).ContextToken; token != "" {
+			// Raw recordings can present a Context carrier outside the SDK's
+			// automatic route scope. Honor their declared auth without changing it.
 			if headers == nil {
 				headers = make(map[string]string)
 			}
-			headers["x-ezclassify-context-token"] = wireCredentials(r).ContextToken
+			headers["x-ezclassify-context-token"] = token
 		}
 		b, status, e := ez.WireReplayRequestForTest(ctx, c, r.Request.Method, r.Request.Path, headers, r.Request.Body)
 		if e != nil {
