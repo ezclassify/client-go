@@ -36,8 +36,8 @@ type PingResult struct {
 // RestClientCredentials carries caller identity and Context authorization, or
 // an opaque managed application credential. AccessToken is sent as a bearer
 // token on every REST request. ContextToken and ApplicationCredential are sent
-// only to /v1/ctx and its descendants. ApplicationCredential cannot be combined
-// with either token.
+// only to /v1/ctx and its descendants. ApplicationCredential may accompany an
+// AccessToken when the application requires a user, but not a ContextToken.
 //
 // Credentials are attached only to requests whose scheme and host match the
 // client's base URL. A redirect to another origin is passed through without them.
@@ -59,8 +59,8 @@ const contextTokenHeader = "x-ezclassify-context-token"
 const applicationCredentialHeader = "x-ezclassify-application-grant"
 
 func (c RestClientCredentials) validate() error {
-	if c.ApplicationCredential != "" && (c.AccessToken != "" || c.ContextToken != "") {
-		return fmt.Errorf("application credential cannot be combined with access or context tokens")
+	if c.ApplicationCredential != "" && c.ContextToken != "" {
+		return fmt.Errorf("application credential cannot be combined with a context token")
 	}
 	if c.ApplicationCredential != strings.TrimSpace(c.ApplicationCredential) {
 		return fmt.Errorf("application credential must not have leading or trailing whitespace")

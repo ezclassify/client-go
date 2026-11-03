@@ -386,17 +386,18 @@ client := ezclassify.New(baseURL, ezclassify.WithCredentials(ezclassify.RestClie
 }))
 ```
 
-For a managed application, use the opaque credential issued by your deployment's management plane instead of both tokens:
+For an application grant, use the opaque credential issued by your deployment's management plane. Supply the current user's access token when the configured application policy requires verified user identity:
 
 ```go
 client := ezclassify.New(baseURL, ezclassify.WithCredentials(ezclassify.RestClientCredentials{
 	ApplicationCredential: os.Getenv("EZCLASSIFY_APPLICATION_CREDENTIAL"),
+	AccessToken: currentUserAccessToken,
 }))
 ```
 
-The SDK sends it as `x-ezclassify-application-grant` only to Context routes on the configured origin, including deployments under a base path. It does not decode or refresh the credential. Combining it with `AccessToken` or `ContextToken` is rejected before any request. The credential identifies the calling application; your application owns its user authentication. A transport supplied with `WithHTTPClient` receives the credential on Context requests; what it does with that credential, including logging, is the caller's responsibility. Headers the transport adds or changes are outside construction-time credential validation.
+The SDK sends the grant as `x-ezclassify-application-grant` only to Context routes on the configured origin, including deployments under a base path. It does not decode or refresh the credential. Combining it with `ContextToken` is rejected before any request. Omit `AccessToken` when the application's user policy does not use a bearer token. Your application authenticates users with its own identity provider and supplies their tokens; the SDK does not sign users in. Keep each client's credentials and caches scoped to one caller. A transport supplied with `WithHTTPClient` receives the credential on Context requests; what it does with that credential, including logging, is the caller's responsibility. Headers the transport adds or changes are outside construction-time credential validation.
 
-The zero-value credential struct is valid for an unauthenticated local runtime. Blank non-empty tokens are rejected. Use `WithHTTPClient` when you also need a custom transport, retry policy, cookie jar, or redirect policy:
+The zero-value credential struct can call public probes and the replay server. Runtime execution requires an authorized application definition and its configured credential and user policy, including for ordinary caller credentials; public application identifiers alone grant no access. Standalone operators can supply protected application configuration without Studio. Blank non-empty tokens are rejected. Use `WithHTTPClient` when you also need a custom transport, retry policy, cookie jar, or redirect policy:
 
 ```go
 type headerTransport struct {
