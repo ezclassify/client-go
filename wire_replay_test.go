@@ -315,3 +315,44 @@ func TestWireResponseMutationControls(t *testing.T) {
 		})
 	}
 }
+
+// Raw cases have no public operation to attach route-scoped credentials for
+// them. Their auth metadata still describes the exact recorded HTTP exchange.
+func TestRawWireRecordedCredentials(t *testing.T) {
+	for _, credential := range []string{"none", "context-token", "invalid-bearer"} {
+		t.Run(credential, func(t *testing.T) {
+			r := wireCase{ID: "route-miss.route-not-found"}
+			r.Auth.Credential = credential
+			r.Request.Method = http.MethodGet
+			r.Request.Path = "/v1/no-such-route"
+			if credential != "context-token" {
+				r.Request.Headers = map[string]string{"accept": "application/json"}
+			}
+			r.Response.Status = http.StatusNotFound
+			r.Response.Headers = map[string]string{"content-type": "application/json"}
+			r.Response.Body = json.RawMessage(`{"code":"route_not_found"}`)
+			originalHeaders, err := json.Marshal(r.Request.Headers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replay := &wireReplay{Case: r}
+			client := ez.New("http://wire.invalid", ez.WithHTTPClient(&http.Client{Transport: wireTransport{replay: replay}}), ez.WithCredentials(wireCredentials(r)))
+			if _, err := runWireDriver(context.Background(), client, r); err != nil {
+				t.Fatal(err)
+			}
+			if replay.Hits != 1 {
+				t.Fatalf("request count %d, want one", replay.Hits)
+			}
+			if err := checkWireObserved(replay); err != nil {
+				t.Fatal(err)
+			}
+			afterHeaders, err := json.Marshal(r.Request.Headers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(originalHeaders, afterHeaders) {
+				t.Fatal("raw driver mutated recorded headers")
+			}
+		})
+	}
+}
